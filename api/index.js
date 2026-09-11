@@ -4,9 +4,11 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureDatabase } from '../db/bootstrap.js';
 const { Pool } = pg;
 const app = express();
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL;
+const pool = connectionString ? new Pool({connectionString,max:5,idleTimeoutMillis:10000,connectionTimeoutMillis:5000}) : null;
 const SECRET = process.env.JWT_SECRET || 'dev-only-change-me';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(process.cwd(),'public');
@@ -26,6 +28,10 @@ async function orgAccess(req,res,next){
 async function audit({orgId,userId,action,entityType,entityId,metadata={}}){await pool.query('INSERT INTO audit_logs(organization_id,user_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,$4,$5,$6)',[orgId,userId,action,entityType,entityId,metadata]);}
 
 app.get('/api/health',(_,res)=>res.json({ok:true,service:'scorerace'}));
+app.use('/api',async(req,res,next)=>{
+ if(!pool)return res.status(503).json({error:'Banco de dados não conectado ao projeto'});
+ try{await ensureDatabase(pool);next()}catch(error){console.error('[database] Falha na inicialização',error);res.status(503).json({error:'Banco de dados indisponível'});}
+});
 app.post('/api/auth/login',async(req,res)=>{const {email,password}=req.body;const q=await pool.query('SELECT * FROM users WHERE lower(email)=lower($1)',[email]);if(!q.rowCount||!(await bcrypt.compare(password,q.rows[0].password_hash)))return res.status(401).json({error:'Credenciais inválidas'});const u=q.rows[0];const orgs=(await pool.query(`SELECT o.id,o.name,o.slug,m.role FROM memberships m JOIN organizations o ON o.id=m.organization_id WHERE m.user_id=$1`,[u.id])).rows;const token=jwt.sign({id:u.id,name:u.name,email:u.email,globalRole:u.global_role,orgs},SECRET,{expiresIn:'8h'});res.cookie('sr_token',token,{httpOnly:true,sameSite:'strict',secure:process.env.NODE_ENV==='production',maxAge:8*3600*1000});res.json({user:{id:u.id,name:u.name,email:u.email,globalRole:u.global_role,orgs}})});
 app.post('/api/auth/logout',(_,res)=>{res.clearCookie('sr_token');res.json({ok:true})});
 app.get('/api/me',auth,(req,res)=>res.json({user:req.user}));

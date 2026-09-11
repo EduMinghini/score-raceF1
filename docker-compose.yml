@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: scorerace
+      POSTGRES_USER: scorerace
+      POSTGRES_PASSWORD: scorerace
+    volumes:
+      - scorerace_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scorerace -d scorerace"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  app:
+    build: .
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://scorerace:scorerace@db:5432/scorerace
+      JWT_SECRET: local-dev-secret-change-in-production-123456789
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "node db/init.js && node src/server.js"]
+volumes:
+  scorerace_pg:
